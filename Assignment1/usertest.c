@@ -54,6 +54,15 @@ int main(int argc, char **argv)
     exit(-1);
    }
 
+ //Krishna
+  long tmp;
+  if(read(fd, &tmp, sizeof(tmp)) < 0){
+     perror("read");
+     exit(-1);
+  }   
+   printf("Received pointer %lx\n", (unsigned long)tmp);
+
+#if 0
   /*Start Accounting*/
 
   cmd.command = FAULT_START;
@@ -84,6 +93,7 @@ int main(int argc, char **argv)
      struct topper_t *topper = &cmd.toppers[ctr];
      printf("Rank #%ld va=%lx count = %ld\n", ctr+1, topper->vaddr, topper->count);
   }
+#endif
   close(fd); 
   munmap((void *)ptr, mmap_size);
   return 0;

@@ -3,6 +3,10 @@
 
 static int command;
 static unsigned long tlb_misses, readwss, writewss, unused;
+static long startAddr;
+//static long endAddr;
+extern int page_fault_pid;
+extern int (*rsvd_fault_hook)(struct mm_struct *mm, struct pt_regs *regs, unsigned long error_code, unsigned long address);
 
 
 
@@ -73,25 +77,46 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
 
 ssize_t handle_read(char *buff, size_t length)
 {
-   /*TODO Read handler*/
+	if(length != 8)
+        {
+                //printk(KERN_INFO "In %s. Length = [%ld] is not correct", __FUNCTION__, length);
+                return -1;
+        }
+
+	*(long *)buff = startAddr;
+
    return 0;
 }
 
 
-ssize_t handle_write(const char *buff, size_t lenth)
+ssize_t handle_write(const char *buff, size_t length)
 {
-   /*TODO Write handler*/
-   return 0;
+	if(length != 8)	
+	{
+		//printk(KERN_INFO "In %s. Length = [%ld] is not correct", __FUNCTION__, length);
+		return -1;
+	}
+
+	startAddr = *(long *)buff;
+	//__native_tlb_flush_one_user(gptr);
+   	return 0;
 }
 
 int handle_open(void)
 {
-   /*TODO open handler*/
-   return 0;
+	//page_fault_pid = current->pid;
+	//rsvd_fault_hook = fault_hook; 
+	//printk(KERN_INFO "In %s. page_fault_pid = %d, rsvd_fault_hook = %p\n", __FUNCTION__,
+	//		page_fault_pid, rsvd_fault_hook);
+	return 0;
 }
 
 int handle_close(void)
 {
-   /*TODO open handler*/
-   return 0;
+	//page_fault_pid = -1;
+        //rsvd_fault_hook = NULL;
+	startAddr = 0;
+	//printk(KERN_INFO "In %s. page_fault_pid = %d, rsvd_fault_hook = %p\n", __FUNCTION__, 
+	//		page_fault_pid, rsvd_fault_hook);
+   	return 0;
 }
