@@ -164,7 +164,7 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
                 pfCount++;
 		if(page_info)	
 		{
-			int idx = (endAddr - startAddr) >> 12;
+			int idx = (endAddr - address) >> 12;
 			page_info[idx].miss_count++;
 			if(error_code & X86_PF_WRITE)	page_info[idx].write_count++;
 			else				page_info[idx].read_count++;
@@ -208,6 +208,7 @@ int fill_toppers(void)
 {					\
 	int i, j;			\
 	unsigned long max_idx;		\
+	PageInfo tmp;		\
 						\
 	if(page_info == NULL)			\
 	{				\
@@ -225,15 +226,38 @@ int fill_toppers(void)
 				max_idx = j;					\
 		}							\
 									\
+		tmp.miss_count = page_info[max_idx].miss_count;		\
+		tmp.read_count = page_info[max_idx].read_count;		\
+		tmp.write_count = page_info[max_idx].write_count;	\
+		page_info[max_idx].miss_count = page_info[i].miss_count; \
+		page_info[max_idx].read_count = page_info[i].read_count;	\
+		page_info[max_idx].write_count = page_info[i].write_count;	\
+		page_info[i].miss_count = tmp.miss_count;	\
+		page_info[i].read_count = tmp.read_count;	\
+		page_info[i].write_count = tmp.write_count;	\
 		ptr->toppers[i].vaddr = startAddr + max_idx * (1<<12);		\
 		ptr->toppers[i].count = page_info[max_idx].count_type;	\
 	}								\
 									\
-	for(; i < MAX_TOPPERS; i++)		\
-	{					\
-		ptr->toppers[i].vaddr = 0;		\
-		ptr->toppers[i].count = 0;	\
-	}				\
+	ptr->valid_entries = i;		\
+	printk(KERN_INFO "In %s. Valid toppers entries [%d]", __FUNCTION__, i);	\
+}
+
+void print_page_info(void)
+{
+	int i;
+	unsigned long addr;
+
+	printk(KERN_INFO "In %s.", __FUNCTION__);
+	if(page_info == NULL)	return;
+
+	for(i = 0; i < numPages; i++)
+	{
+		addr = startAddr + i * (1<<12);
+		printk(KERN_INFO "Addr = [%lx], miss_count = [%ld]", addr, page_info[i].miss_count );
+		printk(KERN_INFO "Addr = [%lx], read_count = [%ld]", addr, page_info[i].read_count );
+		printk(KERN_INFO "Addr = [%lx], write_count = [%ld]", addr, page_info[i].write_count );
+	}
 }
 
 ssize_t handle_read(char *buff, size_t length)
@@ -248,6 +272,7 @@ ssize_t handle_read(char *buff, size_t length)
 
 	//TODO copy the user data to buffer using clac()
 	ptr = (struct read_command *)buff;
+	printk(KERN_INFO "In %s. command is [%ld]", __FUNCTION__, ptr->command);
 
 	switch(ptr->command)
 	{
@@ -279,6 +304,8 @@ ssize_t handle_read(char *buff, size_t length)
 		printk(KERN_INFO "In %s. Invalid command [%ld]", __FUNCTION__, ptr->command);
                 return -1;
 	}
+
+	print_page_info();
 
 #if 0
 	else if(ptr->command == TLBMISS_TOPPERS)
