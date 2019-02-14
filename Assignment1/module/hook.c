@@ -156,8 +156,8 @@ static pte_t* get_pte(unsigned long address, unsigned long *addr_vma)
 static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long error_code, unsigned long address)
 {
 	//Hook will work only for given range of address
-	if(((startAddr >> 12) <= (address>>12)) && ((endAddr >> 12) > (address>>12))
-	 	&& (error_code & X86_PF_USER) ) 
+	if(((startAddr >> 12) <= (address>>12)) && ((endAddr >> 12) > (address>>12)))
+	 	//&& (error_code & X86_PF_USER) ) 
 	{
 		//Walk through page table to get pte
         	gpte = get_pte(address, &vma);
@@ -216,7 +216,8 @@ int fill_toppers(struct read_command *cmd, PageInfo *count_ptr)
 
 	for(i = 0; i < MAX_TOPPERS && i < numPages; i++)
 	{
-		max_idx = i;
+		max_idx = 0;
+		while(count_ptr[max_idx].flag && max_idx < numPages)	max_idx++;
 
 		for(j = 0; j < numPages; j++) 
 		{
@@ -281,7 +282,7 @@ static void free_old_map(void)
 	for(itr = old_map; itr != NULL; itr = next)
 	{
 		next = itr->vm_next;
-		vfree(itr);
+		kfree(itr);
 		itr = next;
 	}
 
@@ -337,7 +338,7 @@ static int find_num_pages(void)
 
 void free_page_info(void)
 {
-	if(miss_count)	vfree(miss_count);
+	if(miss_count)	kfree(miss_count);
 
 	miss_count = NULL;
 	read_count = NULL;
@@ -349,7 +350,7 @@ int malloc_page_info(void)
 	int i;
 	unsigned long addr;
 
-	miss_count = vzalloc(sizeof(PageInfo) * numPages * 3);
+	miss_count = kzalloc(sizeof(PageInfo) * numPages * 3, GFP_ATOMIC);
 	if(miss_count == NULL)
 	{
 		printk(KERN_INFO "In %s. Cannot allocate memory for miss count\n", __FUNCTION__);
@@ -417,7 +418,7 @@ static int read_mmap(void)
 	for(itr = current->mm->mmap; itr != NULL; itr = itr->vm_next)
 	{
 		//Allocate node of linked list. Break if fails
-		ptr = vzalloc(sizeof(struct vm_area_struct));
+		ptr = kzalloc(sizeof(struct vm_area_struct), GFP_ATOMIC);
 		if(ptr == NULL)	break;
 
 		//Set head of linked list
@@ -441,7 +442,7 @@ static int read_mmap(void)
 		for(ptr = old_map; ptr != NULL; ptr = next) 
 		{
 			next = old_map->vm_next;
-			vfree(ptr);
+			kfree(ptr);
 		}
 		old_map = NULL;
 		return -1;
