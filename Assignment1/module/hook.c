@@ -21,7 +21,6 @@ static PageInfo *write_count = NULL;
 //static unsigned long toppers[MAX_TOPPERS];
 static unsigned long startAddr;
 static unsigned long numPages;
-static unsigned long pfCount = 0;
 static unsigned long endAddr;
 struct vm_area_struct *old_map = NULL;
 extern int page_fault_pid;
@@ -173,7 +172,22 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
                 gpte->pte |= (0x1UL << 50);
 
 		//Update all the counters
-                pfCount++;
+                tlb_misses++;
+		//if(command == 2)
+		{
+			int i;
+			readwss = 0;
+			writewss = 0;
+			unused = 0;
+
+			for(i = 0; i < numPages; i++)
+			{
+				if(write_count[i].count > 0)		writewss++;
+				else if(read_count[i].count > 0)	readwss++;
+				else					unused++;
+			}
+		}
+
 		if(miss_count && read_count && write_count)	
 		{
 			int idx = (address - startAddr) >> 12;
@@ -182,7 +196,7 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
 			else				read_count[idx].count++;
 		}
 
-                printk(KERN_INFO "PAGE Fault COUNT %ld\n", pfCount);
+                printk(KERN_INFO "PAGE Fault COUNT %ld\n", tlb_misses);
                 return 0;
         }
 
@@ -439,7 +453,7 @@ static int read_mmap(void)
 int handle_open(void)
 {
 	printk(KERN_INFO "In %s", __FUNCTION__);
-	pfCount = 0;
+	tlb_misses = 0;
 	startAddr = 0;
 	endAddr = 0;
 	return read_mmap();
@@ -477,7 +491,10 @@ int handle_close(void)
 
 	//Reset counters
 	gpte = 0;
-	pfCount = 0;
+	tlb_misses = 0;
+	writewss = 0;
+	readwss = 0;
+	unused = 0;
 
    	return 0;
 }
