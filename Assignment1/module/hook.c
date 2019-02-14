@@ -7,6 +7,7 @@ static long startAddr;
 static long numPages;
 static long pfCount;
 static long endAddr;
+struct vm_area_struct *old_map = NULL;
 extern int page_fault_pid;
 extern int (*rsvd_fault_hook)(struct mm_struct *mm, struct pt_regs *regs, unsigned long error_code, unsigned long address);
 
@@ -145,11 +146,25 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
 
 ssize_t handle_read(char *buff, size_t length)
 {
-	if(length != 8)
+	if(length != sizeof(struct read_command))
         {
-                //printk(KERN_INFO "In %s. Length = [%ld] is not correct", __FUNCTION__, length);
+                printk(KERN_INFO "In %s. Length = [%ld] is not correct", __FUNCTION__, length);
                 return -1;
         }
+
+	//TODO copy the user data to buffer using clac()
+	struct read_command *ptr = buff;
+	if(ptr->command == FAULT_START)
+	{
+		page_fault_pid = current->pid;
+        	rsvd_fault_hook = fault_hook;
+                printk(KERN_INFO "In %s. Fault hook and pis is set", __FUNCTION__);
+		return 0;
+	}
+
+	if(ptr->command == TLBMISS_TOPPERS)
+	{
+	}
 
 	//printk(KERN_INFO "Process pid [%d] cr3 [%lx]\n", current->pid, cr3);
         gpte = get_pte(startAddr, &vma);
@@ -160,71 +175,183 @@ ssize_t handle_read(char *buff, size_t length)
    return 0;
 }
 
+void free_old_map()
+{
+	struct vm_area_struct *itr = NULL, *next = NULL;
+
+	for(itr = old_map; itr != NULL; itr = next)
+	{
+		next = itr->vm_next;
+		vfree(itr);
+		itr = next;
+	}
+
+	old_map = NULL;
+        printk(KERN_INFO "In %s. Old map is freed\n", __FUNCTION__);
+}
+
+void check_size()
+{
+	struct vm_area_struct *itr = NULL;
+
+	//Traverse through old map and get size of user mmap
+	for(itr = old_map; itr != NULL; itr = itr->vm_next)
+	{
+		if(itr->vm_start > startAddr && itr->vm_start < endAddr)
+			endAddr = itr->vm_start;
+	}
+}
+
+int find_num_pages()
+{
+	//Iterator on current mmap
+	struct vm_area_struct *itr = NULL, *next = NULL;
+
+	//Iterate over current mmap and check where is the user provided address
+	for(itr = current->mm->mmap; itr != NULL; itr = itr->vm_next)
+	{
+		if(startAddr >= itr->vm_start && startAddr < ptr->vm_end)
+		{
+			endAddr = itr->vm_end;
+			check_size();
+			break;
+		}
+	}
+
+	//Free the old map linked list.
+	free_old_map();
+
+	//No entry found for user provided address
+	if(itr == NULL)	
+	{
+		printk(KERN_INFO "In %s. No mmap entry found for startAddr = [%lx]\n", 
+				__FUNCTION__, startAddr);
+		retun -1;
+	}
+
+	numPages = (endAddr - startAddr) >> 12; 
+	printk(KERN_INFO "In %s. numPages = [%ld], endAddr = [%lx]\n", 
+				__FUNCTION__, numPages, endAddr);
+	return 0;
+}
 
 ssize_t handle_write(const char *buff, size_t length)
 {
-	static char flag = 0;
+	long ptr;
 	int i;
+
+	//Write is accepting only long type inputs
 	if(length != 8)	
 	{
 		printk(KERN_INFO "In %s. Length = [%ld] is not correct", __FUNCTION__, length);
 		return -1;
 	}
 
-	if(flag == 0)	
+	startAddr = *(long *)buff;
+	printk(KERN_INFO "In %s. startAddr = [%lx]\n", __FUNCTION__, startAddr);
+
+	//Calculate the number of pages in user provided mmap area
+	if(find_num_pages() != 0)
 	{
-		startAddr = *(long *)buff;
-		printk(KERN_INFO "In %s. startAddr = [%lx]\n", __FUNCTION__, startAddr);
-		flag = 1;
+		printk(KERN_INFO "In %s. No entry in mmap found for startAddr = [%lx]\n", 
+				__FUNCTION__, startAddr);
+		return -1;
 	}
-	else
+
+	//Poisen all the entries in user mmap area
+	ptr = startAddr;
+	for(i = 0; i < numPages; i++)
 	{
-		numPages = *(long *)buff;
-		long ptr = startAddr;
-		for(i = 0; i < numPages; i++)
-		{
-        		gpte = get_pte(ptr, &vma);
-        		gpte->pte |= 0x1UL << 50;
-			ptr += (1<<12);
-		}
-		endAddr = ptr;
-		printk(KERN_INFO "In %s. numPages = [%ld], endAddr = [%lx]\n", 
-				__FUNCTION__, numPages, endAddr);
+        	gpte = get_pte(ptr, &vma);
+        	gpte->pte |= 0x1UL << 50;
+		ptr += (1<<12);
 	}
+
 	//__native_tlb_flush_one_user(gptr);
    	return 0;
 }
 
+int read_mmap()
+{
+	struct vm_area_struct *itr, *ptr, *prev = NULL, *next;
+
+	//Loop through current mmap list
+	for(itr = current->mm->mmap; itr != NULL; itr = itr->vm_next)
+	{
+		//Allocate node of linked list. Break if fails
+		ptr = vMalloc(sizeof(vm_area_struct));
+		if(ptr == NULL)	break;
+
+		//Set head of linked list
+		if(!old_map) old_map = ptr;
+
+		//Save mmap info in newly allocated node
+		ptr->vm_start = itr->vm_start;
+		ptr->vm_end = itr->vm_end;
+		ptr->vm_prev = prev;
+		ptr->vm_next = NULL;
+		if(prev) prev->vm_next = ptr;
+		prev = ptr;
+	}
+
+
+	if(ptr == NULL)
+	{
+		printk(KERN_INFO "In %s. Failed to allocate memory.\n", __FUNCTION__); 
+
+		//Free previously allocated memory
+		for(ptr = old_map; ptr != NULL; ptr = next) 
+		{
+			next = old_map->vm_next;
+			free(ptr);
+		}
+		old_map = NULL;
+		return -1;
+	}
+
+	return 0;
+}
+
 int handle_open(void)
 {
-	page_fault_pid = current->pid;
-	rsvd_fault_hook = fault_hook; 
 	pfCount = 0;
 	startAddr = 0;
 	endAddr = 0;
-	printk(KERN_INFO "In %s. page_fault_pid = %d, rsvd_fault_hook = %p\n", __FUNCTION__,
-			page_fault_pid, rsvd_fault_hook);
-	return 0;
+	printk(KERN_INFO "In %s", __FUNCTION__);
+	return read_mmap();
 }
 
 int handle_close(void)
 {
 	int i;
-	long ptr = startAddr;
-	page_fault_pid = -1;
-        rsvd_fault_hook = NULL;
-	startAddr = 0;
-	endAddr = 0;
-	gpte = 0;
-	pfCount = 0;
+	long ptr;
 
+	printk(KERN_INFO "In %s.\n", __FUNCTION__);
+
+	//Free old map if not already freed
+	if(old_map)	free_old_map();
+
+	//Unpoison all the user entries
+	ptr = startAddr;
 	for(i = 0; i < numPages; i++)
 	{
 		gpte = get_pte(ptr, &vma);
 		gpte->pte &= ~(0x1UL << 50);
 		ptr += (1<<12);
 	}
-	//printk(KERN_INFO "In %s. page_fault_pid = %d, rsvd_fault_hook = %p\n", __FUNCTION__, 
-	//		page_fault_pid, rsvd_fault_hook);
+
+	//Remove pag fault hook
+	page_fault_pid = -1;
+        rsvd_fault_hook = NULL;
+
+	//Reset user address info
+	startAddr = 0;
+	endAddr = 0;
+	numPages = 0;
+
+	//Reset counters
+	gpte = 0;
+	pfCount = 0;
+
    	return 0;
 }
