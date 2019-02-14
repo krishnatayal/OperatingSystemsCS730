@@ -1,20 +1,33 @@
 #include "mem_tracker.h"
 #include "interface.h"
 
+#include <asm/traps.h>
+
 static int command;
 static unsigned long tlb_misses, readwss, writewss, unused;
-static long startAddr;
-static long numPages;
-static long pfCount;
-static long endAddr;
+
+typedef struct
+{
+	long miss_count;
+	long read_count;
+	long write_count;
+}PageInfo;
+
+//######## Globals ##############
+static PageInfo *page_info = NULL;
+//static unsigned long toppers[MAX_TOPPERS];
+static unsigned long startAddr;
+static unsigned long numPages;
+static unsigned long pfCount = 0;
+static unsigned long endAddr;
 struct vm_area_struct *old_map = NULL;
 extern int page_fault_pid;
 extern int (*rsvd_fault_hook)(struct mm_struct *mm, struct pt_regs *regs, unsigned long error_code, unsigned long address);
 
 //static unsigned long gptr;
 static pte_t *gpte;
-static long pfcount = 0;
 static unsigned long vma;
+//##############################
 
 
 static ssize_t memtrack_command_show(struct kobject *kobj,
@@ -131,17 +144,96 @@ static pte_t* get_pte(unsigned long address, unsigned long *addr_vma)
 
 static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long error_code, unsigned long address)
 {
-	if(((startAddr >> 12) <= (address>>12)) && ((endAddr >> 12) >= (address>>12)) && error_code == 15) 
+	//Hook will work only for given range of address
+	if(((startAddr >> 12) <= (address>>12)) && ((endAddr >> 12) > (address>>12))
+	 	&& (error_code & X86_PF_USER) ) 
 	{
+		//Walk through page table to get pte
         	gpte = get_pte(address, &vma);
+
+		//Unpoison the entry
                 gpte->pte &= ~(0x1UL << 50);
+
+		//Access the page to add its entry to tlb
                 *(unsigned long *)address = 17;
-                pfcount++;
+
+		//Poison the netry again
                 gpte->pte |= (0x1UL << 50);
-                printk(KERN_INFO "PAGE Fault COUNT %ld\n", pfcount);
+
+		//Update all the counters
+                pfCount++;
+		if(page_info)	
+		{
+			int idx = (endAddr - startAddr) >> 12;
+			page_info[idx].miss_count++;
+			if(error_code & X86_PF_WRITE)	page_info[idx].write_count++;
+			else				page_info[idx].read_count++;
+		}
+
+                printk(KERN_INFO "PAGE Fault COUNT %ld\n", pfCount);
                 return 0;
         }
+
         return -1;
+}
+
+#if 0
+int fill_toppers(void)
+{
+	int i, j;
+	unsigned long max_idx;
+
+	if(page_info == NULL)	return -1;
+
+	for(i = 0; i < MAX_TOPPERS && i < numPages; i++)
+	{
+		max_idx = i;
+
+		for(j = i+1; j < numPages; j++) 
+		{
+			if(page_info[j].miss_count > page_info[max_idx].miss_count)
+				max_idx = j;
+		}
+
+		toppers[i] = startAddr + max_idx * (1<<12);
+	}
+
+	for(; i < MAX_TOPPERS; i++)	toppers[i] = 0;
+
+	return 0;
+}
+#endif
+
+#define FILL_TOPPERS(count_type)	\
+{					\
+	int i, j;			\
+	unsigned long max_idx;		\
+						\
+	if(page_info == NULL)			\
+	{				\
+                printk(KERN_INFO "In %s. page_info is null", __FUNCTION__);	\
+		return -1;		\
+	}				\
+							\
+	for(i = 0; i < MAX_TOPPERS && i < numPages; i++)	\
+	{							\
+		max_idx = i;				\
+							\
+		for(j = i+1; j < numPages; j++) 	\
+		{						\
+			if(page_info[j].count_type > page_info[max_idx].count_type)	\
+				max_idx = j;					\
+		}							\
+									\
+		ptr->toppers[i].vaddr = startAddr + max_idx * (1<<12);		\
+		ptr->toppers[i].count = page_info[max_idx].count_type;	\
+	}								\
+									\
+	for(; i < MAX_TOPPERS; i++)		\
+	{					\
+		ptr->toppers[i].vaddr = 0;		\
+		ptr->toppers[i].count = 0;	\
+	}				\
 }
 
 ssize_t handle_read(char *buff, size_t length)
@@ -156,25 +248,64 @@ ssize_t handle_read(char *buff, size_t length)
 
 	//TODO copy the user data to buffer using clac()
 	ptr = (struct read_command *)buff;
-	if(ptr->command == FAULT_START)
+
+	switch(ptr->command)
 	{
+	case FAULT_START:
 		page_fault_pid = current->pid;
-        	rsvd_fault_hook = fault_hook;
+                rsvd_fault_hook = fault_hook;
                 printk(KERN_INFO "In %s. Fault hook and pid is set", __FUNCTION__);
-		return 0;
+		break;
+
+	case TLBMISS_TOPPERS:
+		{
+			FILL_TOPPERS(miss_count);
+		}
+		break;
+
+	case READ_TOPPERS:
+		{
+			FILL_TOPPERS(read_count);
+		}
+		break;
+
+	case WRITE_TOPPERS:
+		{
+			FILL_TOPPERS(write_count);
+		}
+		break;
+
+	default:
+		printk(KERN_INFO "In %s. Invalid command [%ld]", __FUNCTION__, ptr->command);
+                return -1;
 	}
 
-	if(ptr->command == TLBMISS_TOPPERS)
+#if 0
+	else if(ptr->command == TLBMISS_TOPPERS)
 	{
+		FILL_TOPPERS(miss_count);
 	}
-
+	else if(ptr->command == READ_TOPPERS)
+	{
+		FILL_TOPPERS(read_count);
+	}
+	else if(ptr->command == WRITE_TOPPERS)
+	{
+		FILL_TOPPERS(write_count);
+	}
+	else
+	{
+                printk(KERN_INFO "In %s. Invalid command [%d]", __FUNCTION__, ptr->command);
+		return -1;
+	}
+#endif
 	//printk(KERN_INFO "Process pid [%d] cr3 [%lx]\n", current->pid, cr3);
         //gpte = get_pte(startAddr, &vma);
         //Krishna
         //gpte->pte |= 0x1UL << 50;
 	//*(long *)buff = gpte->pte;
 
-   return 0;
+	return 0;
 }
 
 static void free_old_map(void)
@@ -209,6 +340,7 @@ static int find_num_pages(void)
 	//Iterator on current mmap
 	struct vm_area_struct *itr = NULL;
 
+	printk(KERN_INFO "In %s", __FUNCTION__);
 	//Iterate over current mmap and check where is the user provided address
 	for(itr = current->mm->mmap; itr != NULL; itr = itr->vm_next)
 	{
@@ -260,7 +392,14 @@ ssize_t handle_write(const char *buff, size_t length)
 		return -1;
 	}
 
-	//Poisen all the entries in user mmap area
+	page_info = vzalloc(sizeof(PageInfo) * numPages);
+	if(page_info == NULL)
+	{
+		printk(KERN_INFO "In %s. Cannot allocate memory for page info struct\n", __FUNCTION__);
+		return -1;
+	}
+
+	//Poison all the entries in user mmap area
 	ptr = startAddr;
 	for(i = 0; i < numPages; i++)
 	{
@@ -276,12 +415,13 @@ ssize_t handle_write(const char *buff, size_t length)
 static int read_mmap(void)
 {
 	struct vm_area_struct *itr, *ptr, *prev = NULL, *next;
+	printk(KERN_INFO "In %s", __FUNCTION__);
 
 	//Loop through current mmap list
 	for(itr = current->mm->mmap; itr != NULL; itr = itr->vm_next)
 	{
 		//Allocate node of linked list. Break if fails
-		ptr = vmalloc(sizeof(struct vm_area_struct));
+		ptr = vzalloc(sizeof(struct vm_area_struct));
 		if(ptr == NULL)	break;
 
 		//Set head of linked list
@@ -332,6 +472,8 @@ int handle_close(void)
 
 	//Free old map if not already freed
 	if(old_map)	free_old_map();
+
+	if(page_info)	vfree(page_info);
 
 	//Unpoison all the user entries
 	ptr = startAddr;
