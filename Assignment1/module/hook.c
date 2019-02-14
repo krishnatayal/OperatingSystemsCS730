@@ -11,7 +11,7 @@ struct vm_area_struct *old_map = NULL;
 extern int page_fault_pid;
 extern int (*rsvd_fault_hook)(struct mm_struct *mm, struct pt_regs *regs, unsigned long error_code, unsigned long address);
 
-static unsigned long gptr;
+//static unsigned long gptr;
 static pte_t *gpte;
 static long pfcount = 0;
 static unsigned long vma;
@@ -146,6 +146,8 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
 
 ssize_t handle_read(char *buff, size_t length)
 {
+	struct read_command *ptr;
+
 	if(length != sizeof(struct read_command))
         {
                 printk(KERN_INFO "In %s. Length = [%ld] is not correct", __FUNCTION__, length);
@@ -153,12 +155,12 @@ ssize_t handle_read(char *buff, size_t length)
         }
 
 	//TODO copy the user data to buffer using clac()
-	struct read_command *ptr = buff;
+	ptr = (struct read_command *)buff;
 	if(ptr->command == FAULT_START)
 	{
 		page_fault_pid = current->pid;
         	rsvd_fault_hook = fault_hook;
-                printk(KERN_INFO "In %s. Fault hook and pis is set", __FUNCTION__);
+                printk(KERN_INFO "In %s. Fault hook and pid is set", __FUNCTION__);
 		return 0;
 	}
 
@@ -167,15 +169,15 @@ ssize_t handle_read(char *buff, size_t length)
 	}
 
 	//printk(KERN_INFO "Process pid [%d] cr3 [%lx]\n", current->pid, cr3);
-        gpte = get_pte(startAddr, &vma);
+        //gpte = get_pte(startAddr, &vma);
         //Krishna
         //gpte->pte |= 0x1UL << 50;
-	*(long *)buff = gpte->pte;
+	//*(long *)buff = gpte->pte;
 
    return 0;
 }
 
-void free_old_map()
+static void free_old_map(void)
 {
 	struct vm_area_struct *itr = NULL, *next = NULL;
 
@@ -190,7 +192,7 @@ void free_old_map()
         printk(KERN_INFO "In %s. Old map is freed\n", __FUNCTION__);
 }
 
-void check_size()
+static void check_size(void)
 {
 	struct vm_area_struct *itr = NULL;
 
@@ -202,15 +204,15 @@ void check_size()
 	}
 }
 
-int find_num_pages()
+static int find_num_pages(void)
 {
 	//Iterator on current mmap
-	struct vm_area_struct *itr = NULL, *next = NULL;
+	struct vm_area_struct *itr = NULL;
 
 	//Iterate over current mmap and check where is the user provided address
 	for(itr = current->mm->mmap; itr != NULL; itr = itr->vm_next)
 	{
-		if(startAddr >= itr->vm_start && startAddr < ptr->vm_end)
+		if(startAddr >= itr->vm_start && startAddr < itr->vm_end)
 		{
 			endAddr = itr->vm_end;
 			check_size();
@@ -226,7 +228,7 @@ int find_num_pages()
 	{
 		printk(KERN_INFO "In %s. No mmap entry found for startAddr = [%lx]\n", 
 				__FUNCTION__, startAddr);
-		retun -1;
+		return -1;
 	}
 
 	numPages = (endAddr - startAddr) >> 12; 
@@ -271,7 +273,7 @@ ssize_t handle_write(const char *buff, size_t length)
    	return 0;
 }
 
-int read_mmap()
+static int read_mmap(void)
 {
 	struct vm_area_struct *itr, *ptr, *prev = NULL, *next;
 
@@ -279,7 +281,7 @@ int read_mmap()
 	for(itr = current->mm->mmap; itr != NULL; itr = itr->vm_next)
 	{
 		//Allocate node of linked list. Break if fails
-		ptr = vMalloc(sizeof(vm_area_struct));
+		ptr = vmalloc(sizeof(struct vm_area_struct));
 		if(ptr == NULL)	break;
 
 		//Set head of linked list
@@ -303,7 +305,7 @@ int read_mmap()
 		for(ptr = old_map; ptr != NULL; ptr = next) 
 		{
 			next = old_map->vm_next;
-			free(ptr);
+			vfree(ptr);
 		}
 		old_map = NULL;
 		return -1;
@@ -314,10 +316,10 @@ int read_mmap()
 
 int handle_open(void)
 {
+	printk(KERN_INFO "In %s", __FUNCTION__);
 	pfCount = 0;
 	startAddr = 0;
 	endAddr = 0;
-	printk(KERN_INFO "In %s", __FUNCTION__);
 	return read_mmap();
 }
 
