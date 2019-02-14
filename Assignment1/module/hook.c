@@ -8,13 +8,16 @@ static unsigned long tlb_misses, readwss, writewss, unused;
 
 typedef struct
 {
-	long miss_count;
-	long read_count;
-	long write_count;
+	char flag;
+	unsigned long addr;
+	unsigned long count;
 }PageInfo;
 
 //######## Globals ##############
-static PageInfo *page_info = NULL;
+PageInfo *miss_count = NULL;
+PageInfo *read_count = NULL;
+PageInfo *write_count = NULL;
+
 //static unsigned long toppers[MAX_TOPPERS];
 static unsigned long startAddr;
 static unsigned long numPages;
@@ -162,12 +165,12 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
 
 		//Update all the counters
                 pfCount++;
-		if(page_info)	
+		if(miss_count && read_count && write_count)	
 		{
-			int idx = (endAddr - address) >> 12;
-			page_info[idx].miss_count++;
-			if(error_code & X86_PF_WRITE)	page_info[idx].write_count++;
-			else				page_info[idx].read_count++;
+			int idx = (address - startAddr) >> 12;
+			miss_count[idx].count++;
+			if(error_code & X86_PF_WRITE)	write_count[idx].count++;
+			else				read_count[idx].count++;
 		}
 
                 printk(KERN_INFO "PAGE Fault COUNT %ld\n", pfCount);
@@ -177,87 +180,36 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
         return -1;
 }
 
-#if 0
-int fill_toppers(void)
+int fill_toppers(struct read_command *cmd, PageInfo *count_ptr)
 {
 	int i, j;
 	unsigned long max_idx;
 
-	if(page_info == NULL)	return -1;
+	if(count_ptr == NULL)
+	{
+		cmd->valid_entries = 0;
+		return -1;
+	}
 
 	for(i = 0; i < MAX_TOPPERS && i < numPages; i++)
 	{
 		max_idx = i;
 
-		for(j = i+1; j < numPages; j++) 
+		for(j = 0; j < numPages; j++) 
 		{
-			if(page_info[j].miss_count > page_info[max_idx].miss_count)
+			if(!count_ptr[j].flag && count_ptr[j].count > count_ptr[max_idx].count)
 				max_idx = j;
 		}
 
-		toppers[i] = startAddr + max_idx * (1<<12);
+		cmd->toppers[i].vaddr = count_ptr[max_idx].addr;
+		cmd->toppers[i].count = count_ptr[max_idx].count;
+		count_ptr[max_idx].flag = 1;
 	}
 
-	for(; i < MAX_TOPPERS; i++)	toppers[i] = 0;
+	cmd->valid_entries = i;
+	for(i = 0; i < numPages; i++)  count_ptr[i].flag = 0;
 
 	return 0;
-}
-#endif
-
-#define FILL_TOPPERS(count_type)	\
-{					\
-	int i, j;			\
-	unsigned long max_idx;		\
-	PageInfo tmp;		\
-						\
-	if(page_info == NULL)			\
-	{				\
-                printk(KERN_INFO "In %s. page_info is null", __FUNCTION__);	\
-		return -1;		\
-	}				\
-							\
-	for(i = 0; i < MAX_TOPPERS && i < numPages; i++)	\
-	{							\
-		max_idx = i;				\
-							\
-		for(j = i+1; j < numPages; j++) 	\
-		{						\
-			if(page_info[j].count_type > page_info[max_idx].count_type)	\
-				max_idx = j;					\
-		}							\
-									\
-		tmp.miss_count = page_info[max_idx].miss_count;		\
-		tmp.read_count = page_info[max_idx].read_count;		\
-		tmp.write_count = page_info[max_idx].write_count;	\
-		page_info[max_idx].miss_count = page_info[i].miss_count; \
-		page_info[max_idx].read_count = page_info[i].read_count;	\
-		page_info[max_idx].write_count = page_info[i].write_count;	\
-		page_info[i].miss_count = tmp.miss_count;	\
-		page_info[i].read_count = tmp.read_count;	\
-		page_info[i].write_count = tmp.write_count;	\
-		ptr->toppers[i].vaddr = startAddr + max_idx * (1<<12);		\
-		ptr->toppers[i].count = page_info[max_idx].count_type;	\
-	}								\
-									\
-	ptr->valid_entries = i;		\
-	printk(KERN_INFO "In %s. Valid toppers entries [%d]", __FUNCTION__, i);	\
-}
-
-void print_page_info(void)
-{
-	int i;
-	unsigned long addr;
-
-	printk(KERN_INFO "In %s.", __FUNCTION__);
-	if(page_info == NULL)	return;
-
-	for(i = 0; i < numPages; i++)
-	{
-		addr = startAddr + i * (1<<12);
-		printk(KERN_INFO "Addr = [%lx], miss_count = [%ld]", addr, page_info[i].miss_count );
-		printk(KERN_INFO "Addr = [%lx], read_count = [%ld]", addr, page_info[i].read_count );
-		printk(KERN_INFO "Addr = [%lx], write_count = [%ld]", addr, page_info[i].write_count );
-	}
 }
 
 ssize_t handle_read(char *buff, size_t length)
@@ -276,63 +228,27 @@ ssize_t handle_read(char *buff, size_t length)
 
 	switch(ptr->command)
 	{
-	case FAULT_START:
-		page_fault_pid = current->pid;
-                rsvd_fault_hook = fault_hook;
-                printk(KERN_INFO "In %s. Fault hook and pid is set", __FUNCTION__);
-		break;
+		case FAULT_START:
+			page_fault_pid = current->pid;
+                	rsvd_fault_hook = fault_hook;
+                	printk(KERN_INFO "In %s. Fault hook and pid is set", __FUNCTION__);
+			return 0;
 
-	case TLBMISS_TOPPERS:
-		{
-			FILL_TOPPERS(miss_count);
-		}
-		break;
+		case TLBMISS_TOPPERS:
+			return fill_toppers(ptr, miss_count);
 
-	case READ_TOPPERS:
-		{
-			FILL_TOPPERS(read_count);
-		}
-		break;
+		case READ_TOPPERS:
+			return fill_toppers(ptr, miss_count);
 
-	case WRITE_TOPPERS:
-		{
-			FILL_TOPPERS(write_count);
-		}
-		break;
+		case WRITE_TOPPERS:
+			return fill_toppers(ptr, miss_count);
 
-	default:
-		printk(KERN_INFO "In %s. Invalid command [%ld]", __FUNCTION__, ptr->command);
-                return -1;
+		default:
+			printk(KERN_INFO "In %s. Invalid command [%ld]", __FUNCTION__, ptr->command);
+                	return -1;
 	}
 
-	print_page_info();
-
-#if 0
-	else if(ptr->command == TLBMISS_TOPPERS)
-	{
-		FILL_TOPPERS(miss_count);
-	}
-	else if(ptr->command == READ_TOPPERS)
-	{
-		FILL_TOPPERS(read_count);
-	}
-	else if(ptr->command == WRITE_TOPPERS)
-	{
-		FILL_TOPPERS(write_count);
-	}
-	else
-	{
-                printk(KERN_INFO "In %s. Invalid command [%d]", __FUNCTION__, ptr->command);
-		return -1;
-	}
-#endif
 	//printk(KERN_INFO "Process pid [%d] cr3 [%lx]\n", current->pid, cr3);
-        //gpte = get_pte(startAddr, &vma);
-        //Krishna
-        //gpte->pte |= 0x1UL << 50;
-	//*(long *)buff = gpte->pte;
-
-	return 0;
 }
 
 static void free_old_map(void)
@@ -396,6 +312,41 @@ static int find_num_pages(void)
 	return 0;
 }
 
+void free_page_info(void)
+{
+	if(miss_count)	vfree(miss_count);
+
+	miss_count = NULL;
+	read_count = NULL;
+	write_count = NULL;
+}
+
+int malloc_page_info(void)
+{
+	int i;
+	unsigned long addr;
+
+	miss_count = vzalloc(sizeof(PageInfo) * numPages * 3);
+	if(miss_count == NULL)
+	{
+		printk(KERN_INFO "In %s. Cannot allocate memory for miss count\n", __FUNCTION__);
+		return -1;
+	}
+
+	read_count = miss_count + numPages;
+	write_count = miss_count + numPages * 2;
+
+	for(i = 0; i < numPages; i++)
+	{
+		addr = startAddr + (i << 12);
+		miss_count[i].addr = addr;
+		read_count[i].addr = addr;
+		write_count[i].addr = addr;
+	}
+
+	return 0;
+}
+
 ssize_t handle_write(const char *buff, size_t length)
 {
 	long ptr;
@@ -419,12 +370,7 @@ ssize_t handle_write(const char *buff, size_t length)
 		return -1;
 	}
 
-	page_info = vzalloc(sizeof(PageInfo) * numPages);
-	if(page_info == NULL)
-	{
-		printk(KERN_INFO "In %s. Cannot allocate memory for page info struct\n", __FUNCTION__);
-		return -1;
-	}
+	if(malloc_page_info() < 0)	return -1;
 
 	//Poison all the entries in user mmap area
 	ptr = startAddr;
@@ -500,7 +446,7 @@ int handle_close(void)
 	//Free old map if not already freed
 	if(old_map)	free_old_map();
 
-	if(page_info)	vfree(page_info);
+	free_page_info();
 
 	//Unpoison all the user entries
 	ptr = startAddr;
