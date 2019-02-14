@@ -14,9 +14,9 @@ typedef struct
 }PageInfo;
 
 //######## Globals ##############
-PageInfo *miss_count = NULL;
-PageInfo *read_count = NULL;
-PageInfo *write_count = NULL;
+static PageInfo *miss_count = NULL;
+static PageInfo *read_count = NULL;
+static PageInfo *write_count = NULL;
 
 //static unsigned long toppers[MAX_TOPPERS];
 static unsigned long startAddr;
@@ -43,8 +43,17 @@ static ssize_t memtrack_command_set(struct kobject *kobj,
                                    struct kobj_attribute *attr,
                                    const char *buf, size_t count)
 {
-        /*TODO    Part of assignment, needed to be implemented by you*/
-        return count;
+	command = buf[0] - '0';
+	if(command < 0 || command > 2)
+	{
+		printk(KERN_INFO "In %s, Invalid command = [%d]", __FUNCTION__, command);
+		return 0;
+	}
+	else
+	{
+		printk(KERN_INFO "In %s, command = [%d]", __FUNCTION__, command);
+        	return count;
+	}
 }
 
 static struct kobj_attribute memtrack_command_attribute = __ATTR(command,0644,memtrack_command_show, memtrack_command_set);
