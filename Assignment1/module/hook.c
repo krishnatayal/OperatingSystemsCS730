@@ -225,6 +225,7 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
 		user_cr3();
 		stac();
                 tmp = *(unsigned long *)address;
+		*(unsigned long *)address = tmp;
 		clac();
 		kernel_cr3();
 
@@ -326,12 +327,15 @@ ssize_t handle_read(char *buff, size_t length)
 
 		case TLBMISS_TOPPERS:
 			fill_toppers(ptr2, miss_count);
+			break;
 
 		case READ_TOPPERS:
 			fill_toppers(ptr2, miss_count);
+			break;
 
 		case WRITE_TOPPERS:
 			fill_toppers(ptr2, miss_count);
+			break;
 
 		default:
 			printk(KERN_INFO "In %s. Invalid command [%ld]", __FUNCTION__, ptr2->command);
@@ -342,6 +346,7 @@ ssize_t handle_read(char *buff, size_t length)
         ptr1->valid_entries = ptr2->valid_entries;
 	for(i = 0; i < MAX_TOPPERS; i++)	ptr1->toppers[i] = ptr2->toppers[i];
         clac();
+	return 0;
 
 	//printk(KERN_INFO "Process pid [%d] cr3 [%lx]\n", current->pid, cr3);
 }
