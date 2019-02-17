@@ -2,6 +2,7 @@
 #include "interface.h"
 
 #include <asm/traps.h>
+//#include "../../../../kernelFile/linux-4.19.13/arch/x86/entry/calling.h"
 
 static int command;
 static unsigned long tlb_misses, readwss, writewss, unused;
@@ -19,6 +20,7 @@ static PageInfo *read_count = NULL;
 static PageInfo *write_count = NULL;
 
 //static unsigned long toppers[MAX_TOPPERS];
+static unsigned long cr3;
 static unsigned long startAddr;
 static unsigned long numPages;
 static unsigned long endAddr;
@@ -99,6 +101,40 @@ struct attribute_group memtrack_attr_group = {
 };
 
 
+void user_cr3(void)
+{
+        	__asm__ __volatile__("mov %%cr3, %0;"
+                              :"=r" (cr3)
+			      :
+                              :"memory");
+
+
+               printk(KERN_INFO "current cr3 = %lx\n", cr3);
+		cr3 |= (0x1UL << 11);
+               printk(KERN_INFO "now cr3 = %lx\n", cr3);
+        	__asm__ __volatile__("mov %0, %%cr3;"
+			      :
+                              :"r" (cr3)
+                              :"memory");
+}
+
+void kernel_cr3(void)
+{
+        	__asm__ __volatile__("mov %%cr3, %0;"
+                              :"=r" (cr3)
+			      :
+                              :"memory");
+
+               printk(KERN_INFO "kernel current cr3 = %lx\n", cr3);
+
+		cr3 &= ~(0x1UL << 11);
+               printk(KERN_INFO "kernel now cr3 = %lx\n", cr3);
+        	__asm__ __volatile__("mov %0, %%cr3;"
+			      :
+                              :"r" (cr3)
+                              :"memory");
+}
+
 static pte_t* get_pte(unsigned long address, unsigned long *addr_vma)
 {
         pgd_t *pgd;
@@ -153,8 +189,28 @@ static pte_t* get_pte(unsigned long address, unsigned long *addr_vma)
 
 }
 
+static void poison_code(int flag)
+{
+	int i, num_code_pages;
+	unsigned long addr;
+	unsigned long	start_code = current->mm->start_code;
+	unsigned long	end_code = current->mm->end_code;
+
+	num_code_pages = (end_code - start_code)>>12;
+	for(i = 0; i < num_code_pages; i++)
+	{
+		addr = start_code + (i << 12);
+        	gpte = get_pte(addr, &vma);
+                if(!flag)	gpte->pte |= (0x1UL << 50);
+		else		gpte->pte &= ~(0x1UL << 50);
+	}
+	if(!flag)	printk(KERN_INFO "Code poisoned");
+	else		printk(KERN_INFO "Code Unpoisoned");
+}
+
 static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long error_code, unsigned long address)
 {
+	unsigned long tmp;
 	//Hook will work only for given range of address
 	if(((startAddr >> 12) <= (address>>12)) && ((endAddr >> 12) > (address>>12)))
 	 	//&& (error_code & X86_PF_USER) ) 
@@ -166,7 +222,11 @@ static int fault_hook(struct mm_struct *mm, struct pt_regs *regs, unsigned long 
                 gpte->pte &= ~(0x1UL << 50);
 
 		//Access the page to add its entry to tlb
-                *(unsigned long *)address = 17;
+		user_cr3();
+		stac();
+                tmp = *(unsigned long *)address;
+		clac();
+		kernel_cr3();
 
 		//Poison the netry again
                 gpte->pte |= (0x1UL << 50);
@@ -238,7 +298,9 @@ int fill_toppers(struct read_command *cmd, PageInfo *count_ptr)
 
 ssize_t handle_read(char *buff, size_t length)
 {
-	struct read_command *ptr;
+	struct read_command *ptr1, *ptr2;
+	struct read_command cmd;
+	int i;
 
 	if(length != sizeof(struct read_command))
         {
@@ -246,11 +308,15 @@ ssize_t handle_read(char *buff, size_t length)
                 return -1;
         }
 
-	//TODO copy the user data to buffer using clac()
-	ptr = (struct read_command *)buff;
-	printk(KERN_INFO "In %s. command is [%ld]", __FUNCTION__, ptr->command);
+	stac();
+	ptr1 = (struct read_command *)buff;
+	cmd.command = ptr1->command;
+	clac();
 
-	switch(ptr->command)
+	ptr2 = &cmd;
+	printk(KERN_INFO "In %s. command is [%ld]", __FUNCTION__, ptr2->command);
+
+	switch(ptr2->command)
 	{
 		case FAULT_START:
 			page_fault_pid = current->pid;
@@ -259,18 +325,23 @@ ssize_t handle_read(char *buff, size_t length)
 			return 0;
 
 		case TLBMISS_TOPPERS:
-			return fill_toppers(ptr, miss_count);
+			fill_toppers(ptr2, miss_count);
 
 		case READ_TOPPERS:
-			return fill_toppers(ptr, miss_count);
+			fill_toppers(ptr2, miss_count);
 
 		case WRITE_TOPPERS:
-			return fill_toppers(ptr, miss_count);
+			fill_toppers(ptr2, miss_count);
 
 		default:
-			printk(KERN_INFO "In %s. Invalid command [%ld]", __FUNCTION__, ptr->command);
+			printk(KERN_INFO "In %s. Invalid command [%ld]", __FUNCTION__, ptr2->command);
                 	return -1;
 	}
+
+	stac();
+        ptr1->valid_entries = ptr2->valid_entries;
+	for(i = 0; i < MAX_TOPPERS; i++)	ptr1->toppers[i] = ptr2->toppers[i];
+        clac();
 
 	//printk(KERN_INFO "Process pid [%d] cr3 [%lx]\n", current->pid, cr3);
 }
@@ -457,6 +528,7 @@ int handle_open(void)
 	tlb_misses = 0;
 	startAddr = 0;
 	endAddr = 0;
+	user_cr3();
 	return read_mmap();
 }
 
