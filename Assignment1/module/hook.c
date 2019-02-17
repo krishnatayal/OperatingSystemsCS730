@@ -1,9 +1,25 @@
+/*	Name:	Krishna Tayal
+ *	Roll:	18111033
+ *
+ *	Discussed with Sunil:
+ *	Part-2 hint. 
+ *
+ *	I have written code for Q2 but not able to understand why its not working.
+ *	Please look into the code also.
+ *	I tried poisoning the all the code pages also, I was expecting that current instruction
+ *	will get executed and page fault will happen on next instruction. But it was not the case.
+ *
+ *	Now I have updated the value of cr3 to switch, but its not working.
+ *
+ * 	To enable logs, just uncomment the line #define TEST
+ *
+ */
+
 #include "mem_tracker.h"
 #include "interface.h"
-
 #include <asm/traps.h>
 
-#define TEST
+//#define TEST
 static int command;
 static unsigned long tlb_misses, readwss, writewss, unused;
 
